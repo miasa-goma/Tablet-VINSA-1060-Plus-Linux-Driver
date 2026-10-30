@@ -136,7 +136,7 @@ impl DeviceDispatcher {
             )
             .expect("Error building virtual keyboard"),
             was_touching: false,
-            is_mouse_mode: true,
+            is_mouse_mode: false,
             last_x: 2048,
             last_y: 2048,
             mouse_area_scale: 0.3,
@@ -145,17 +145,17 @@ impl DeviceDispatcher {
     }
 
     fn smooth_coordinates(&mut self, x: i32, y: i32) -> (i32, i32) {
-        let (smoothed_x, smoothed_y) = if self.is_mouse_mode {
-            ((self.last_x * 1 + x) / 2, (self.last_y * 1 + y) / 2)
-        } else {
-            ((self.last_x * 3 + x) / 4, (self.last_y * 3 + y) / 4)
-        };
+    let (smoothed_x, smoothed_y) = if self.is_mouse_mode {
+        ((self.last_x + x) / 2, (self.last_y + y) / 2)
+    } else {
+        (x, y)
+    };
 
-        self.last_x = smoothed_x;
-        self.last_y = smoothed_y;
+    self.last_x = smoothed_x;
+    self.last_y = smoothed_y;
 
-        (smoothed_x, smoothed_y)
-    }
+    (smoothed_x, smoothed_y)
+}
 
     pub fn syn(&mut self) -> Result<(), Error> {
         self.virtual_keyboard.emit(&[InputEvent::new(
@@ -310,15 +310,20 @@ impl DeviceDispatcher {
             is_multimedia_area
         );
 
-        self.pen_emit_touch(raw_data);
+        //self.pen_emit_touch(raw_data);
     }
 
     fn normalize_pressure_mode(raw_pressure: i32, threshold: i32, scaling: i32) -> i32 {
-        match 2000 - raw_pressure {
-            x if x <= threshold => 0,
-            x => x * scaling,
-        }
+    // Si el dispositivo reporta presión cero, no hay contacto.
+    if raw_pressure == 0 {
+        return 0;
     }
+
+    match 2000 - raw_pressure {
+        x if x <= threshold => 0,
+        x => x * scaling,
+    }
+}
 
     fn raw_pen_abs_to_pen_abs_events(&mut self, x_axis: i32, y_axis: i32, pressure: i32, is_multimedia_area: bool) {
         let (x, y) = if is_multimedia_area {
@@ -336,24 +341,43 @@ impl DeviceDispatcher {
         } else {
             (x_axis, y_axis.clamp(0, 4095))
         };
+        let is_touching = pressure > 0;
 
-        self.virtual_pen.emit(&[InputEvent::new(
-            EventType::ABSOLUTE,
-            AbsoluteAxisType::ABS_X.0,
-            x,
-        )]).expect("Error emitting ABS_X.");
+        let mut events = vec![
+            InputEvent::new(
+                EventType::ABSOLUTE,
+                AbsoluteAxisType::ABS_X.0,
+                x,
+            ),
+            InputEvent::new(
+                EventType::ABSOLUTE,
+                AbsoluteAxisType::ABS_Y.0,
+                y,
+            ),
+            InputEvent::new(
+                EventType::ABSOLUTE,
+                AbsoluteAxisType::ABS_PRESSURE.0,
+                pressure,
+            ),
+        ];
 
-        self.virtual_pen.emit(&[InputEvent::new(
-            EventType::ABSOLUTE,
-            AbsoluteAxisType::ABS_Y.0,
-            y,
-        )]).expect("Error emitting ABS_Y.");
+        if is_touching != self.was_touching {
+            events.push(InputEvent::new(
+                EventType::KEY,
+                Key::BTN_TOUCH.code(),
+                if is_touching {
+                    Self::PRESSED
+                } else {
+                    Self::RELEASED
+                },
+            ));
+        }
 
-        self.virtual_pen.emit(&[InputEvent::new(
-            EventType::ABSOLUTE,
-            AbsoluteAxisType::ABS_PRESSURE.0,
-            pressure,
-        )]).expect("Error emitting Pressure.");
+        self.virtual_pen
+            .emit(&events)
+            .expect("Error emitting pen data.");
+
+        self.was_touching = is_touching;
     }
 
     fn pen_emit_touch(&mut self, raw_data: &RawDataReader) {
@@ -366,8 +390,7 @@ impl DeviceDispatcher {
         let is_touching = normalized_pressure > 0;
         if let Some(state) = match (self.was_touching, is_touching) {
             (false, true) => Some(Self::PRESSED),
-            (true, false) => Some(Self::RELEASED),
-            _ => None,
+            (true, false) => Some(Self::RELEASED),            _ => None,
         } {
             self.virtual_pen.emit(&[InputEvent::new(
                 EventType::KEY,
