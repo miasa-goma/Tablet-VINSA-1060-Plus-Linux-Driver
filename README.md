@@ -1,4 +1,4 @@
-# VINSA 1060 Plus / Gadnic Linux Driver — Community Fix
+# VINSA 1060 Plus / Gadnic Linux Driver — Community Fix ONLY FOR GADNIC
 
 [Español](#español) · [English](#english)
 
